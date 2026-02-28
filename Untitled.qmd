@@ -1,0 +1,100 @@
+---
+title: "Lost of Total Area in GWAS study"
+author: "Pritom Roy"
+format: pdf
+---
+
+```{r include=FALSE}
+knitr::opts_chunk$set(echo = T, warning = F,message = F)
+source("./scripts/scripts.R")
+library(tidyverse)
+library(future)
+library(furrr)
+theme_set(theme_classic())
+theme_update(plot.title = element_text(hjust = .5))
+```
+
+
+```{r}
+source("./scripts/scripts.R")
+files <- list.files("rds_files")[7]
+powerDf <- read_rds(sprintf("rds_files/%s",files))
+powerDf |> 
+  ggplot(aes(or, power, col = model)) +
+  geom_point() +
+  geom_line() +
+  facet_wrap(mar ~ prev,scales = "free_x") 
+```
+
+```{r}
+source("./scripts/scripts.R")
+files <- list.files("rds_files")[7]
+powerDf <- read_rds(sprintf("rds_files/%s",files))
+powerDf |> 
+  ggplot(aes(or, power, col = model)) +
+  geom_point() +
+  geom_line() +
+  facet_wrap(mar ~ prev,scales = "free_x") 
+```
+
+
+```{r}
+files <- list.files("rds_files copy")[7]
+read_rds(sprintf("rds_files copy/%s",files)) |> 
+  getPolygonDf(baseLineModel = str_extract(string = files,pattern = "(?<=model_).+(?=_sample)"),
+               sampleSize = as.numeric(str_extract(string = files,pattern = "(?<=sample_).+(?=\\.rds)")) 
+               ) |> 
+  drawPolygon(filterMaxPowerDiffAtOne = 1)
+# ggsave(filename = "recessive_500.pdf")
+```
+
+```{r}
+files <- list.files("rds_files")[7]
+read_rds(sprintf("rds_files/%s",files)) |> 
+  getPolygonDf(baseLineModel = str_extract(string = files,pattern = "(?<=model_).+(?=_sample)"),
+               sampleSize = as.numeric(str_extract(string = files,pattern = "(?<=sample_).+(?=\\.rds)")) 
+               ) |> 
+  drawPolygon(filterMaxPowerDiffAtOne = 1)
+```
+
+
+
+```{r}
+source("./scripts/scripts.R")
+model <- ModelRecessiveCC()
+modelComp <- list(ModelAdditiveCC())
+parmsGrid <- expand_grid(mar = .1, prevalance = .1) 
+
+nCases <- 500
+model$setParms(n_case = nCases, n_control = nCases)
+powerDf <- runFullExperiment(modelRef = model,modelComp = modelComp,parmsGrid = parmsGrid,leaveEmptyCore = 10)
+powerDf |> 
+  ggplot(aes(or, power, col = model)) +
+  geom_line()
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

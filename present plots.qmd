@@ -1,0 +1,240 @@
+---
+title: "All model presentation"
+format: pdf
+---
+
+
+```{r include=FALSE}
+source("./scripts/scripts.R")
+knitr::opts_chunk$set(echo = F,warning = F,message = F, fig.height = 5.5, fig.width = 7)
+library(tidyverse)
+library(patchwork)
+
+
+fn_plot_all <- function(temp1){
+  plot1 <-
+    temp1 |> 
+    select(model,data,power) |>
+    mutate(power_ratio = power/sort(power)[2] ) |> 
+    arrange(power_ratio) |>
+    mutate(model = as_factor(model)) |> 
+    unnest() |> 
+    ggplot(aes(or, power, col = model)) +
+    geom_point(alpha = .3, show.legend = F) +
+    geom_line(data = temp1 |> 
+                select(model, polygon_upper) |> 
+                unnest(), 
+              show.legend = F)
+  
+  plot2 <-
+    temp1 |> 
+    select(model, polygon, power) |> 
+    mutate(power_ratio = power/sort(power)[2] ) |> 
+    arrange(power_ratio) |>
+    mutate(model = as_factor(model)) |> 
+    unnest() |> 
+    ggplot(aes(or, power, fill = model)) +
+    geom_polygon(alpha = .5, col = "gray10", show.legend = F) +
+    geom_label(data = temp1 |> 
+                select(model,power,or_025) |> 
+                mutate(or_025 = min(or_025)) |> 
+                arrange(power) |> 
+                mutate(model = as_factor(model),
+                       y = 1 - (1:n() - 1)/10,
+                       power = round(power,5)),
+              mapping = aes(x = or_025,y = y,label = power),hjust = 0,show.legend = F)
+  
+  temp2 <- 
+    temp1 |> 
+    select(model, polygon, power, power_std) |> 
+    mutate(power_ratio = power/sort(power)[2] ) |> 
+    arrange(power_ratio) |> 
+    mutate(inc = (1:n()-1)*.25,
+           polygon = map2(.x = inc,
+                          .y = polygon,
+                          .f = \(inc,df){
+                            df |> 
+                              mutate(power = power + inc,
+                                     or = (or - min(or))/(max(or)-min(or)))
+                          }),
+           model = as_factor(model)
+           ) 
+
+  plot3 <-
+    temp2 |> 
+    mutate(model1 = fct_rev(model)) |> 
+    unnest() |>
+    ggplot(aes(or, power, fill = model )) +
+    geom_polygon(aes(group = model1),col = "gray10") +
+    geom_label(data = temp2 |> 
+                mutate(power_std = round(power_std,4),
+                       y = n()/2 - inc), 
+              mapping = aes(x = 0,y = y,label = power_std),
+              show.legend = F,
+              hjust = 0)
+  
+  plot4 <-
+    temp2 |> 
+    ggplot(aes(power,power_std)) +
+    geom_smooth(method = "lm", se = F, col = "gray80") +
+    geom_point(aes(col = model),show.legend = F) 
+  
+  (plot1 + plot2) / (plot3 + plot4) + 
+    plot_layout(guides = "collect")
+}
+
+create_df_for_polygon <- function(powerDf, baseLineModel){
+  fn_getPowerQuantile <- function(model, df, q = 0.025){
+      # browser()
+      uniroot(f = \(or) predict(object = model,newdata = tibble(or = or)) - q, interval = c(1, max(df$or) + 20 ) )$root
+    } 
+    
+  fn_getPowerQuantileU <- function(model, df, q = 0.975){
+    # browser()
+    if(max(df$power) < .975){
+      max(df$or)
+    }else {
+      uniroot(f = \(or) predict(object = model,newdata = tibble(or = or)) - q, interval = c(1, max(df$or) + 20 ) )$root
+    }
+  } 
+    
+    
+  powerDf |> 
+    nest(data = -c(mar,prev,model)) |> 
+    arrange(prev,mar) |> 
+    mutate(facet = sprintf("(m: %.2f)~vs~(pi: %.2f)", mar, prev),
+           facet = as_factor(facet),
+           ) |> 
+    group_by(facet) |> 
+    mutate(mps_model = map(.x = data,
+                           .f = \(df) scam::scam(formula = power ~ s(or, bs="mpi"), data = df) ),
+           or_025 = map2_dbl(.x = mps_model,.y = data,.f = ~ fn_getPowerQuantile(.x, .y, 0.025) ),
+           or_975 = map2_dbl(.x = mps_model,.y = data,.f = ~ fn_getPowerQuantileU(.x, .y, 0.975) ),
+           or_min = min(or_025),
+           or_max = if_else(model == baseLineModel, NA, or_975),
+           ) |> 
+    mutate(model = str_replace(model,"_"," "),
+           model = str_to_title(model),
+           model = str_replace(model," ","-"),
+           base_model = mps_model[is.na(or_max)]
+           ) |> 
+    mutate(polygon = pmap(.l = list(mps_model,base_model,or_min,or_975),
+                                 .f = \(comp_model,base_model,or_min,or_max){
+                                   or_forward <- seq(or_min,or_max,length.out = 100)
+                                   or_backward <- rev(or_forward)
+                                   power_forward <- predict(object = comp_model,newdata = tibble(or = c(or_forward)))
+                                   power_backward <- predict(object = base_model,newdata = tibble(or = c(or_backward)))
+                                   bind_rows(
+                                     tibble(or = or_forward,power = power_forward),
+                                     tibble(or = or_backward,power = power_backward)
+                                   ) |> 
+                                     mutate(power = case_when(power < 0 ~ 0,
+                                                              1 < power ~ 1,
+                                                              TRUE ~ power))
+                                 }),
+           polygon_upper = pmap(.l = list(mps_model,base_model,or_min,or_975),
+                                .f = \(comp_model,base_model,or_min,or_max){
+                                  or_forward <- seq(or_min,or_max,length.out = 100)
+                                  power_forward <- predict(object = comp_model,newdata = tibble(or = c(or_forward)))
+                                  tibble(or = or_forward,power = power_forward) |> 
+                                    mutate(power = case_when(power < 0 ~ 0,
+                                                             1 < power ~ 1,
+                                                             TRUE ~ power))
+                                  }),
+           power = map_dbl(.x = polygon,
+                           .f = \(df){
+                             df |>
+                               mutate(type = rep(c("forward","backward"),each = n()/2)) |>
+                               pivot_wider(names_from = type, values_from = power) |>
+                               summarise(LoPT = mean(abs(backward - forward)) * diff(range(or)) ) |>
+                               pull()
+                           }),
+           power_std = map_dbl(.x = polygon,
+                               .f = \(df){
+                                 df |>
+                                   mutate(type = rep(c("forward","backward"),each = n()/2)) |>
+                                   pivot_wider(names_from = type, values_from = power) |>
+                                   summarise(LoPT = mean(abs(backward - forward))) |>
+                                   mutate(LoPT = LoPT * .95) |>
+                                   pull()
+                               }),
+           power_diffAtOne = map_dbl(.x = polygon,
+                                 .f = \(df){
+                                   df |>
+                                     slice_max(or) |>
+                                     pull(power) |>
+                                     diff()
+                                 })
+           )
+  
+}
+```
+
+
+```{r}
+for(i in 1:length(list.files("rds_files"))){
+  files <- list.files("rds_files")[i]
+  
+  all_plots <- 
+    read_rds(sprintf("rds_files/%s",files)) |> 
+    create_df_for_polygon(baseLineModel = str_extract(string = files,pattern = "(?<=model_).+(?=_sample)") ) |> 
+    nest(data = -facet) |> 
+    ungroup() |> 
+    mutate(facet = as.character(facet),
+           plot = map2(.x = facet, 
+                       .y = data,
+                       .f = \(label, temp1){
+                         fn_plot_all(temp1) +
+                           plot_annotation(title = label)
+                       })
+           )
+  
+  underlyingModel <- 
+    str_extract(string = files,pattern = "(?<=model_).+(?=_sample)") |> 
+    str_replace("_"," ") |> 
+    str_to_title() |> 
+    str_replace(" ","-")
+  sampleSize <- str_extract(string = files,pattern = "(?<=_sample_).+(?=\\.rds)")
+  
+  (
+    tibble(label = sprintf("The underlying model is %s \nwith the sample of %s.", underlyingModel, sampleSize),
+           x = 0, 
+           y = 0) |> 
+      ggplot(aes(x,y, label = label)) +
+      geom_text(size = 8) +
+      scale_x_continuous(breaks = NULL) +
+      scale_y_continuous(breaks = NULL) +
+      labs(x = "", y = "")
+    ) |> print()
+  
+  print(all_plots$plot)
+}
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
